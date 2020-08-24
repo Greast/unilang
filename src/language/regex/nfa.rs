@@ -1,21 +1,20 @@
 use core::iter::FromIterator;
-use std::collections::{BTreeMap, LinkedList};
+use std::collections::{BTreeSet, BTreeMap, LinkedList};
 use std::ptr::null_mut;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Node<T> {
-    empty: Vec<*const Self>,
-    keys: BTreeMap<T, Vec<*const Self>>,
+    empty: BTreeSet<*const Self>,
+    keys: BTreeMap<T, BTreeSet<*const Self>>,
 }
 
 impl<T> Node<T> {
     fn remap(&mut self, map: &BTreeMap<*const Self, *const Self>) {
-        let closure = |ptr: &mut *const Self| {
-            *ptr = *map.get(ptr).unwrap_or(ptr);
-        };
-        self.empty.iter_mut().for_each(closure);
-        self.keys.iter_mut().for_each(|(_, vec)| {
-            vec.iter_mut().for_each(closure);
+        let closure = |ptr: *const Self| *map.get(&ptr).unwrap_or(&ptr);
+
+        self.empty = self.empty.iter().map(Deref::deref).map(closure).collect();
+        self.keys.iter_mut().for_each(|(_, set)| {
+            set = set.drain().map(closure).collect();
         });
     }
 }
@@ -92,6 +91,7 @@ where
     }
 }
 
+//Wrappers for the start and accept state.
 impl<T> NFA<T> {
     pub fn start(&self) -> &Node<T> {
         self.graph.front().unwrap()
@@ -107,6 +107,7 @@ impl<T> NFA<T> {
     }
 }
 
+//Essential nfa functions.
 impl<T> NFA<T>
 where
     T: Ord,
@@ -122,7 +123,7 @@ where
         self
     }
 
-    pub fn star(mut self) -> Self {
+    pub fn plus(mut self) -> Self {
         let ptr = self.start() as *const _;
         self.accept_mut().empty.push(ptr);
         self
@@ -150,5 +151,37 @@ where
         self.accept_mut().empty.push(rhs.start());
         self.graph.append(&mut rhs.graph);
         self
+    }
+
+    pub fn optional(mut self) -> Self {
+        let ptr = self.accept() as *const _;
+        self.start_mut().empty.push(ptr);
+        self
+    }
+}
+
+impl<T> NFA<T>
+where
+    T: Ord + Clone,
+{
+    pub fn star(mut self) -> Self {
+        self.plus().optional()
+    }
+
+    pub fn range(mut self, from: usize, to: Option<usize>) -> Self {
+        let head = (0..from)
+            .into_iter()
+            .map(|_| self.clone())
+            .fold(self.clone(), Self::and);
+        let tail = if let Some(x) = to {
+            (from..x)
+                .into_iter()
+                .map(|_| self.clone())
+                .map(Self::optional)
+                .fold(self.clone(), Self::and)
+        } else {
+            self.clone().star()
+        };
+        head.and(tail)
     }
 }
